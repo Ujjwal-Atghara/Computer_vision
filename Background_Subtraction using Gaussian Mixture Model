@@ -1,0 +1,382 @@
+import os
+import numpy as np
+import cv2 as cv
+import pandas as pd
+from scipy.stats import multivariate_normal as mvn
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+"""
+ Created a class 'vid2frm' for handling video objects.
+ Supports the follwing attributes:
+     1. frames : returns total number of frames in video.
+     2. height : returns the height of frame.
+     3. width  : returns the width of frame.
+     4. size   : returns size of frame as a tuple.
+     5. frame_rate : returns the frame rate of video.
+     6. cap    : pointing to a VideoCapture object of input video.
+
+ Supports following methods:
+     1. write_frames
+             input1: name of directory (string),
+             input2: name of frame(string))
+             writes the frames with integers appended to the frame name.
+     2. radiance (x-coordinate, y-coordinate):
+             returns a list of radiance values of pixel at (x, y) from all frames.
+     3. release(): to release the VideoCapture at .cap attribute.
+"""
+
+
+class vid2frm():
+
+    def __init__(self, loc):
+        self.loc = loc
+        self.capk = cv.VideoCapture(self.loc)
+
+        # checking for the availability of captured object
+        if int(self.capk.get(cv.CAP_PROP_FRAME_WIDTH)) == 0:
+            print('Error! Specified video may not be available at this location.')
+
+        # checking the number of frames
+        k = 0
+        while True:
+            ret, frame = self.capk.read()
+            if ret == True:
+                k += 1
+            else:
+                break
+        self.capk.release()
+        self.frames = k
+
+        # creating cv's video capture object
+        self.cap = cv.VideoCapture(self.loc)
+        print("An unread cv's VideoCapture object has been created and could be accessed using .cap attribute.")
+        print("Release the VideoCapture using 'release()' method.")
+        self.height = self.cap.get(cv.CAP_PROP_FRAME_HEIGHT)
+        self.width = self.cap.get(cv.CAP_PROP_FRAME_WIDTH)
+        self.size = (self.height, self.width)
+        self.frame_rate = self.cap.get(cv.CAP_PROP_FPS)
+
+    def release(self):
+        self.cap.release()
+
+    # writing frames to directory, 'dit' with frame names, 'fname{i}', i = 0, 1, 2...
+    def write_frames(self, dit, fname):
+
+        # checking if the input directory exists, else new directory will be created.
+        try:
+            os.mkdir(dit)
+        except:
+            FileExistsError
+            print(f'The directory {dit} exists.')
+        else:
+            print(f'The directory {dit} has been created.')
+
+        cap = cv.VideoCapture(self.loc)
+        i = 0
+        while True:
+            ret, frame = cap.read()
+            if ret == True:
+                cv.imwrite(f'{dit}/{fname}{i}.jpg', frame)
+            else:
+                print(f'{i} frames has been written successfully.')
+                break
+            i += 1
+        cap.release()
+
+    def radiance(self, x, y):
+        cap = cv.VideoCapture(self.loc)
+        bgr = []
+        i = 0
+        while True:
+            ret, frame = cap.read()
+            if ret == True:
+                b, g, r = cv.split(frame)
+                bgr.append([f'frame{i}', b[x][y], g[x][y], r[x][y]])
+                i += 1
+            else:
+                break
+        cap.release()
+        return bgr
+
+
+# creating an instance of vid2frm class
+vidx = vid2frm('vid.mpg')
+vidx.release()
+
+# writing frames
+vidx.write_frames('xxx', 'frm')
+
+
+# -----------Scatter plots----------------
+# Based on different scatters it was determined that number of gaussians required for modelling each pixel should be 4.
+z1 = np.array(vidx.radiance(50, 80))
+z1 = np.array(z1[:, 1:], dtype=float)
+z2 = np.array(vidx.radiance(180, 180))
+z2 = np.array(z2[:, 1:], dtype=float)
+
+fig = plt.figure(figsize=(15, 15))
+ax = fig.add_subplot(121, projection="3d")
+ax.set_title('Radiance scatter for a pixel of person-passing-by region')
+ax.scatter3D(z1[:, 0], z1[:, 1], z1[:, 2])
+ax.set_xlabel('Blue'); ax.set_ylabel('Green'); ax.set_zlabel('Red')
+ax = fig.add_subplot(122, projection="3d")
+ax.set_title('Radiance scatter for a pixel from tree-shadow region')
+ax.scatter3D(z2[:, 0], z2[:, 1], z2[:, 2])
+ax.set_xlabel('Blue'); ax.set_ylabel('Green'); ax.set_zlabel('Red')
+plt.show()
+
+
+# ---------------Array of frames-----------
+imgx = []              # array of frames
+i = 0
+while i < 999:
+    frm = np.array(cv.imread(f'vid/frame{i}.jpg', 1), dtype = float)
+    imgx.append(frm)
+    i += 1
+
+"""
+ train (func.): trains a pixel.
+ Parameters:  1. radiance of each pixel from all frames (x) to be used for training the current parameters.
+              2. number of gaussians for modeling the pixel. (k)
+              3. matrix of initial mean vectors of all gaussians for all pixels in a frame. (mu)
+              4. matrix of initial covariance of all gaussians for all pixels in a frame. (cov)
+              5. matrix of initial weights of all gaussians for all pixels in a frame. (w)
+              6. size of frame (as a tuple). (size)
+ Returns updated mean, covariance and weight matrices after training with a single frame.
+"""
+
+def train(x, k, mu, cov, alpha, w, size):
+
+    i = 0
+    while i < size[0]:
+        j = 0
+        while j < size[1]:
+
+            # determining the gaussians from which the x is at distance < 2.5.
+            h = 0
+            ind = []
+            while h < k:
+                if (1/cov[i][j][h])*sum((x[i][j] - mu[i][j][h])**2) <= 6.25:     # distance threshold = 2.5
+                    ind.append(h)
+                h += 1
+
+            # if none of the gaussians is a match for current radiance, only the gaussian with least weight is updated.
+            if len(ind) == 0:
+                ind_min_w = np.argmin(w[i][j])
+                mu[i][j][ind_min_w] = x[i][j]
+                cov[i][j][ind_min_w] = 1600                # high variance for a new observation
+                w[i][j][ind_min_w] = 0.01                  # low weight
+
+            else:
+                p = []
+                h = 0
+                while h<k:
+                    if h in ind:
+                        p.append(alpha*mvn.pdf(x[i][j], mu[i][j][h], cov[i][j][h]*np.eye(3,3)))
+                    else:
+                        p.append(0)
+                    h += 1
+                # print(p)
+                # updating the means in the light of new observation
+                h = 0
+                while h < k:
+                    if h in ind:
+                        mu[i][j][h] = (1-p[h])*mu[i][j][h] + p[h]*x[i][j]
+                        #print(mu[i][j][h])
+                        #print((1-p[h])*mu[i][j][h] + p[h]*x[i][j])
+                        cov[i][j][h] = (1-p[h])*cov[i][j][h] + p[h]*sum((x[i][j]-mu[i][j][h])**2)
+                        #print(cov[i][j][h])
+                    h += 1
+
+                # updating the prior weights
+                h = 0
+                while h < k:
+                    m = 0
+                    if h in ind:
+                        m = 1
+                    w[i][j][h] = (1-alpha)*w[i][j][h] + alpha*m
+                    h += 1
+                sw = sum(w[i][j])
+                w[i][j] = [t/sw for t in w[i][j]]
+
+            j += 1
+        i += 1
+    return mu, cov, w
+
+
+
+# -----------------Initialization of parameters------------
+H = vidx.height       # 240
+B = vidx.width        # 352
+
+K = 4                 # number of gaussians
+A = 0.001             # alpha
+T = 0.7               # percentage of radiances from a pixel for all frames that describes background.
+
+# initial mean matrix
+# initial mean for all gaussians modeling a pixel is taken as the radiance of corresponding pixel from first frame of video.
+mm = np.array([np.array([0, 0, 0], dtype=float) for _ in range(K)])
+mean_mat = np.array([np.array([mm for _ in range(B)]) for _ in range(H)])
+i = 0
+while i < H:
+    j = 0
+    while j < B:
+        mean_mat[i][j] = np.array([imgx[0][i][j] for _ in range(K)])
+        j += 1
+    i += 1
+
+# initial cov matrix (covarinace between r, g, b is assumed as zero and variance of each of r, g, b is assumed same.)
+cov_i = 400*np.ones((K, 1))
+cov_mat = np.array([np.array([cov_i for s in range(B)]) for t in range(H)])
+
+# initial weight matrix (random initialization)
+wi = np.array([0.4, 0.3, 0.2, 0.1])
+w_mat = np.array([np.array([wi for s in range(B)]) for t in range(H)])
+
+
+
+# ------------Training the parameters using all the frames.----------
+i = 1
+while i < 999:
+    MM, VV, WW = train(imgx[i], K, mean_mat, cov_mat, A, w_mat, (H, B))
+    mean_mat = MM
+    cov_mat = VV
+    w_mat = WW
+    i += 1
+
+
+
+"""
+ selection(func.) : For selecting first B gaussians which models the background based on threshold
+ Parameters: 1. matrix of trained weights,
+             2. matrix of trained covariances,
+             3. Threshold (percentage of information at a pixel which corresponds to background, *assumed 0.7*)
+ Returns the matrices describing the parameters of selected gaussians. (Returns mean and covarinace matrix of selected gaussians)
+"""
+
+def selection(w, mu, cov, per):
+    sel_mean_mat = []       # matrix for holding the selected gaussian means of each pixel.
+    sel_cov_mat = []        # matrix for holding the selected gaussian variances of each pixel.
+    i = 0
+    while i < H:
+        sel_mean_row = []
+        sel_cov_row = []
+        j = 0
+        while j < len(w[0]):
+            # deciding b (nimber of gaussians explaining background)
+            b = 0
+            wc = [t for t in w[i][j]]
+            wc.sort(reverse=True)
+            h = 0
+            s = []
+            sum = 0
+            while h < len(wc):
+                sum = sum + wc[h]
+                s.append(sum)
+                h += 1
+            h = 0
+            while h<len(s):
+                if s[h]>per:
+                    b = h+1
+                    break
+                h+=1
+
+            # selecting the gaussians using (w/st.dev) ratio
+            r = []
+            h = 0
+            t = 0
+            while h < len(wc):
+                t = w[i][j][h] /(cov[i][j][h]**0.5)
+                r.append(t)
+                h += 1
+            h = 0
+            inx = []
+            while h < b:
+                rm = np.argmax(r)
+                inx.append(rm)
+                r[rm] = 0
+                h += 1
+
+            sel_mean_pix = []
+            sel_cov_pix = []
+            for q in inx:
+                sel_mean_pix.append(mu[i][j][q])
+                sel_cov_pix.append(cov[i][j][q])
+            sel_mean_row.append(sel_mean_pix)
+            sel_cov_row.append(sel_cov_pix)
+            j += 1
+        sel_mean_mat.append(sel_mean_row)
+        sel_cov_mat.append(sel_cov_row)
+        i += 1
+    return sel_mean_mat, sel_cov_mat
+
+
+
+# ----------------Applying the selection function on trained matrices.--------------
+SM, SCV = selection(w_mat, mean_mat, cov_mat, T)
+
+# Creating switch matrix for differentiating the pixels of original frames into background and foreground.
+fn = 0
+while fn < 999:
+    switch = np.zeros((H, B))
+    for ii in range(H):
+        for jj in range(B):
+            h = 0
+            dst = 0
+            while h < len(SM[ii][jj]):
+                dst = (1/SCV[ii][jj][h][0])*sum((imgx[fn][ii+R1][jj] - SM[ii][jj][h])**2)
+                if dst < 6.25:
+                    switch[ii][jj] = 1
+                    break
+                h += 1
+    fn += 1
+
+
+
+# Writing the frames using switch matrix.
+fn = 0
+while fn < 999:
+    # creating white canvas for writing foreground pixels
+    wpx = np.array([np.uint8(255), np.uint8(255), np.uint8(255)])
+    wpx_r = np.array([wpx for i in range (352)])
+    fore_frm = np.array([wpx_r for j in range(240)])        # blank white canvas
+
+    fram = imgx[fn]
+    for p in range(240):
+        for q in range(352):
+            if H[p][q] == 0:
+                #fram[p][q] = np.array([np.uint8(255), np.uint8(255), np.uint8(255)])
+                fore_frm[p][q] = fram[p][q]
+                fram[p][q] = np.uint8(mean[p][q])
+
+    cv.imwrite(f'bg/framen{fn}.jpg', fram)           # writing background frames
+    cv.imwrite(f'fg/framen{fn}.jpg', fore_frm)       # writing foreground frames
+    fn += 1
+
+
+
+# Creating video out of frames.
+frame_arrb = []
+i = 0
+while i < 999:
+    img = cv.imread(f'bg/framen{i}.jpg', 1)
+    frame_arrb.append(img)
+    i += 1
+optb = cv.VideoWriter('bg.avi', cv.VideoWriter_fourcc(*'XVID'), 30, (352, 240))
+for i in frame_arr:
+    optb.write(i)
+optb.release()
+
+frame_arrf = []
+i = 0
+while i < 999:
+    img = cv.imread(f'fg/framen{i}.jpg', 1)
+    frame_arrf.append(img)
+    i += 1
+optf = cv.VideoWriter('fg.avi', cv.VideoWriter_fourcc(*'XVID'), 30, (352, 240))
+for i in frame_arr:
+    optf.write(i)
+optf.release()
+
+# **************************END**************************
