@@ -1,2 +1,6 @@
 # Computer_vision
 Basic algorithms related to computer vision
+
+## Background subtraction using Gaussian Mixture Model (from scratch build)
+A gaussian mixture is used model each pixel in a training video such that the foreground pixels could be predicted in the test videos. Usually the method of Frame differentiation is used to separate foreground pixels from background, hoewever, in most realistic situations the background is dynamic, where Frame differentiation will fail. Dynamic background examples are, flowing river, waves on a beach, flickering shadows, fluttering flag etc. Gaussian models are very good at capturing the dynamic background changes.
+This is an online training model which could be eaisly integrated with a source producing frames continuously (e.g.,CCTV). Each incoming frame is used to tune in the model parameters and the foreground prediction runs parallely. This keeps the model parameters in a state of continuous updation such that any type of changes in background could be captured, e.g., day-night shifts, seasonal shifts, new object being added into the background etc. This makes the foreground prediction highly accurate. The trained parameters could be retrived any time from the model for direct application on other video frame having same background. 
